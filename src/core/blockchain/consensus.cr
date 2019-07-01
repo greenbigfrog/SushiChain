@@ -12,7 +12,7 @@
 
 module ::Sushi::Core::Consensus
 
-  def valid_pow?(block_hash : String, nonce : UInt64, difficulty : Int32) : Bool
+  def valid_pow?(block_hash : String, nonce : UInt64, difficulty : Int32, debug_pow = false) : Bool
     nonce_salt = nonce.to_s(16)
     nonce_salt = "0" + nonce_salt if nonce_salt.bytesize % 2 != 0
 
@@ -22,9 +22,16 @@ module ::Sushi::Core::Consensus
     end
 
     buffer = Argon2::Engine.raw_hash_buffer(
+      #jjf Argon2::Engine::EngineType::ARGON2ID, block_hash, nonce_slice.hexstring, 1, 8, 512)
       Argon2::Engine::EngineType::ARGON2ID, block_hash, nonce_slice.hexstring, 1, 16, 512)
 
     bits = buffer.flat_map { |b| (0..7).map { |n| b.bit(n) }.reverse }
+
+    if debug_pow
+      leading_bits = bits[0, difficulty].join("")
+      debug "Leading bits: #{leading_bits} indicates difficulty of #{leading_bits.size}"
+    end
+
     bits[0, difficulty].join("") == "0" * difficulty
   end
 
@@ -33,7 +40,7 @@ module ::Sushi::Core::Consensus
     valid_pow?(block_hash, nonce, difficulty)
   end
 
-  # Dark Gravity Wave history lookback (in blocks)
+  # Dark Gravity Wave history lookback for averaging (in blocks)
   HISTORY_LOOKBACK       =      24
 
   # SushiChain desired block spacing (in seconds)
@@ -42,8 +49,12 @@ module ::Sushi::Core::Consensus
   # Plus or minus tolerance multiplier for acceptable block spacing
   POW_TIME_TOLERANCE     = 0.1_f64
 
+  # Limits for how much of an individual block time will affect the running average
+  HI_AVG_INCLUSION_LIMIT  = POW_TARGET_SPACING * 3_f64
+  LOW_AVG_INCLUSION_LIMIT = POW_TARGET_SPACING * (1_f64 / 3_f64)
+
   # Difficulty value to be used when there is absolutely no history reference
-  DEFAULT_DIFFICULTY_TARGET      = 14_i32
+  DEFAULT_DIFFICULTY_TARGET      = 13_i32
 
   def block_time_too_low(block_time : Float64) : Bool
     block_time < POW_TARGET_SPACING * (1_f64 - POW_TIME_TOLERANCE)
@@ -60,13 +71,13 @@ module ::Sushi::Core::Consensus
   def find_acceptable_difficulty_in_history(chain : Blockchain::Chain)
     i = chain.size - 1
     last_block_time = 0_i64
-    while i > 0
+    while (i > chain.size - HISTORY_LOOKBACK) && (i > 0)
       block_reading = chain[i]
       if last_block_time > 0 
         elapsed = (last_block_time - block_reading.timestamp).to_f64
         if block_time_is_acceptable(elapsed)
-          debug "Found a previous block(#{i}) that took #{elapsed} seconds to generate, using its difficulty value of #{block_reading.next_difficulty}"
-          return block_reading.next_difficulty
+          debug "Found a previous block(#{i}) that took #{elapsed} seconds to generate, using its difficulty value of #{block_reading.difficulty}"
+          return block_reading.difficulty
         end
       end
       last_block_time = block_reading.timestamp
@@ -82,7 +93,7 @@ module ::Sushi::Core::Consensus
       debug "Last block time of #{last_elapsed_time} is too high.. bumping difficulty down to #{derived_difficulty}"
     elsif block_time_too_low(last_elapsed_time)
       derived_difficulty = last_difficulty
-      debug "Last block time #{last_elapsed_time} is too low.. but leaving difficulty unchanged from #{derived_difficulty} (only bump up via avg)"
+      debug "Last block time of #{last_elapsed_time} is too low.. leave difficulty un-changed #{derived_difficulty} (only bump up via avg)"
     else
       derived_difficulty = last_difficulty
       debug "Last block time #{last_elapsed_time} is acceptable.. leave difficulty unchanged from #{derived_difficulty}"
@@ -95,7 +106,7 @@ module ::Sushi::Core::Consensus
     last = chain.size - 1
     debug "Using last 2 block times for checking recent performance"
     last_elapsed_time = (chain[last].timestamp - chain[last - 1].timestamp).to_f64
-    last_difficulty = chain[last].next_difficulty
+    last_difficulty = chain[last].difficulty
     if block_time_is_acceptable(last_elapsed_time)
       debug "Most recent block time of #{last_elapsed_time} is acceptable.. using its difficulty of #{last_difficulty}"
       acceptable_difficulty = last_difficulty
@@ -104,9 +115,9 @@ module ::Sushi::Core::Consensus
       acceptable_difficulty = find_acceptable_difficulty_in_history(chain)
     end
     if acceptable_difficulty == 0
-      if (average_block_time * 5_f64 < POW_TARGET_SPACING)
+      if (average_block_time * 3_f64 < POW_TARGET_SPACING)
         acceptable_difficulty = last_difficulty + 1
-        debug "No recent good block time was found and avg block time is less than one fifth of desired, bump difficulty to #{acceptable_difficulty}"
+        debug "Avg block time is less than one third of desired, bump difficulty to #{acceptable_difficulty}"
       else
         debug "No recent good block time was found, going to adjust difficulty based on last block's generation time"
         acceptable_difficulty = derive_difficulty_from_last_block(last_elapsed_time, last_difficulty)
@@ -115,9 +126,15 @@ module ::Sushi::Core::Consensus
     return acceptable_difficulty
   end
   
+  def throttle_elapsed_time_difference(diff : Float64) : Float64
+    diff =  LOW_AVG_INCLUSION_LIMIT if diff < LOW_AVG_INCLUSION_LIMIT
+    diff =  HI_AVG_INCLUSION_LIMIT if diff > HI_AVG_INCLUSION_LIMIT
+    diff
+  end
+
   # Dark Gravity Wave based difficulty adjustment calculation (Original algorithm created by Evan Duffield)
 
-  def block_difficulty(chain : Blockchain::Chain?) : Int32
+  def block_difficulty(blockchain : Blockchain) : Int32
     actual_timespan = 0_f64
     last_block_time = 0_i64
     past_difficulty_avg = 0_f64
@@ -130,32 +147,48 @@ module ::Sushi::Core::Consensus
     return DEFAULT_DIFFICULTY_TARGET if ENV.has_key?("SC_E2E") # for e2e test
 
     # return difficulty default target if chain non-existant or not enough block history 
-    if !chain || chain.size < 3
-      debug "entered block_difficulty with short initial chain (2 or fewer blocks), returning default difficulty of #{DEFAULT_DIFFICULTY_TARGET}"
+    chain = blockchain.chain
+    debug "entered block_difficulty with chain length of #{chain.size}" if chain
+    if !chain || chain.size < 2
+      debug "entered block_difficulty with short initial chain (fewer than 2 blocks), returning default difficulty of #{DEFAULT_DIFFICULTY_TARGET}"
       return DEFAULT_DIFFICULTY_TARGET
     end
-    debug "entered block_difficulty with chain length of #{chain.size}" if chain
+
+    if (chain.size < 5)
+      last = chain.size - 1
+      debug "Not enough historical data.. derive difficulty from performance of last block generation"
+      last_elapsed_time = (chain[last].timestamp - chain[last - 1].timestamp).to_f64
+      last_difficulty = chain[last].difficulty
+      return derive_difficulty_from_last_block(last_elapsed_time, last_difficulty)
+    end
 
     # construct an average difficulty from the historical blocks and calculate elapsed time of historical blocks
     count_blocks = 0
-    i = chain.size - 1
     oldest_history_spot = Math.max(chain.size - HISTORY_LOOKBACK, 1)
+    i = oldest_history_spot
     debug "Oldest history spot: #{oldest_history_spot}"
-    while i >= oldest_history_spot
+    while i < chain.size
       block_reading = chain[i]
-      count_blocks += 1
-      if count_blocks == 1
-        past_difficulty_avg = block_reading.next_difficulty
-      else
-        past_difficulty_avg = ((past_difficulty_avg_prev * count_blocks)+(block_reading.next_difficulty)) / (count_blocks + 1).to_f64
+      if block_reading.timestamp > 0
+        count_blocks += 1
+        if count_blocks == 1
+          past_difficulty_avg = block_reading.difficulty
+        else
+          past_difficulty_avg = ((past_difficulty_avg_prev * count_blocks)+(block_reading.difficulty)) / (count_blocks + 1).to_f64
+        end
+        past_difficulty_avg_prev = past_difficulty_avg
+        if last_block_time > 0 
+          diff = (block_reading.timestamp - last_block_time).to_f64
+          debug "******** Block #{block_reading.index} was generated in #{diff} seconds with difficulty: #{block_reading.difficulty} ********"
+          throttled_diff = throttle_elapsed_time_difference(diff)
+          debug "Throttled generation time is #{throttled_diff}" if throttled_diff != diff
+          actual_timespan += diff
+        else
+          debug "******** Looking at block #{block_reading.index} with difficulty #{block_reading.difficulty} and timestamp #{block_reading.timestamp} ******** "
+        end
+        last_block_time = block_reading.timestamp
       end
-      past_difficulty_avg_prev = past_difficulty_avg
-      if last_block_time > 0 
-        diff = (last_block_time - block_reading.timestamp).to_f64
-        actual_timespan += diff
-      end
-      last_block_time = block_reading.timestamp
-      i -= 1
+      i += 1
     end
     calculated_difficulty = past_difficulty_avg
 

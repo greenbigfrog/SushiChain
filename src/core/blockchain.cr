@@ -25,7 +25,7 @@ module ::Sushi::Core
       prev_hash: String,
       merkle_tree_root: String,
       timestamp: Int64,
-      next_difficulty: Int32,
+      difficulty: Int32,
     )
 
     getter chain : Chain = Chain.new
@@ -63,25 +63,60 @@ module ::Sushi::Core
       info "there are #{database.max_index + 1} blocks recorded"
 
       current_index = 0_i64
+      last_block_time = 0_i64
+      total_block_time = 0_i64
+      longest_block_time = -1_i64
+      shortest_block_time = 500000_i64
+      elapsed_time = 0_i64
+      _block = database.get_block(current_index)
+      block = _block
 
       loop do
         _block = database.get_block(current_index)
-
         break unless block = _block
+        debug "read block #{block.index} from DB with nonce of #{block.nonce} with timestamp #{block.timestamp}"
+        debug " and using difficulty of #{latest_block.difficulty}" if last_block_time > 0
         break unless block.valid?(self, true)
-
         @chain.push(block)
+        if last_block_time > 0 
+          elapsed_time = block.timestamp - last_block_time
+        end
+        last_block_time = block.timestamp
+        total_block_time += elapsed_time
 
-        refresh_mining_block
-        dapps_record
+        longest_block_time = elapsed_time if elapsed_time > longest_block_time
+        shortest_block_time = elapsed_time if (elapsed_time != 0) && (elapsed_time < shortest_block_time)
 
         current_index += 1
 
         progress "block ##{current_index} was imported", current_index, database.max_index
       end
+
+      if (@chain.size > 2)
+        debug "Total block time: #{total_block_time}"
+        debug "Current index: #{current_index}"
+        debug "Average block time: #{total_block_time / current_index}"
+        debug "Shortest block time: #{shortest_block_time}"
+        debug "Longest block time: #{longest_block_time}"
+      end
+
+      push_genesis if @chain.size == 0
+
+      refresh_mining_block(block_difficulty(self))
+
+      dapps_record
+
     rescue e : Exception
       error "Error could not restore blockchain from database"
       error e.message.not_nil! if e.message
+      debug "Detected an invalid block..."
+      block.to_s
+      if @chain.size > 0
+        if block
+          debug "verifying nonce using difficulty #{block.difficulty}"
+          valid_pow?(block.to_hash, block.nonce, block.difficulty, true)
+        end
+      end
       warning "removing invalid blocks from database"
       database.delete_blocks(current_index.not_nil!)
     ensure
@@ -105,25 +140,36 @@ module ::Sushi::Core
     end
 
     def mining_block_difficulty : Int32
-      latest_block.next_difficulty
+      the_mining_block = @mining_block
+      if the_mining_block
+        the_mining_block.difficulty
+      else
+        latest_block.difficulty
+      end
     end
 
+    
+    #def mining_block_difficulty_miner : Int32
+    #  value = (mining_block_difficulty.to_f / 3).ceil.to_i
+    #  Math.max(mining_block_difficulty - value, 1)
+    #end
+
     def mining_block_difficulty_miner : Int32
-      block_difficulty(chain)
+     mining_block_difficulty - 1
     end
 
     def push_block(block : Block)
       @chain.push(block)
-
-      dapps_record
-
       if database = @database
+        debug "sending to DB, block with nonce of #{block.nonce} and timestamp of #{block.timestamp}"
         database.push_block(block)
       end
 
-      clean_transactions
+      dapps_record
 
-      refresh_mining_block
+      refresh_mining_block(block_difficulty(self))
+
+      clean_transactions
 
       block
     end
@@ -151,20 +197,21 @@ module ::Sushi::Core
 
         dapps_record
       rescue e : Exception
-        error "found invalid block while syncing a blocks"
+        error "found invalid block while syncing blocks"
         error "the reason:"
         error e.message.not_nil!
 
         break
       end
 
+      push_genesis if @chain.size == 0
       if database = @database
         database.replace_chain(@chain)
       end
 
       clean_transactions
 
-      refresh_mining_block
+      refresh_mining_block(block_difficulty(self))
 
       true
     end
@@ -218,7 +265,7 @@ module ::Sushi::Core
       genesis_transactions = @premine ? Premine.transactions(@premine.not_nil!.get_config) : [] of Transaction
       genesis_nonce = 0_u64
       genesis_prev_hash = "genesis"
-      genesis_timestamp = 0_i64
+      genesis_timestamp = Time.now.to_unix 
       genesis_difficulty = Consensus::DEFAULT_DIFFICULTY_TARGET
 
       Block.new(
@@ -260,7 +307,7 @@ module ::Sushi::Core
     end
 
     def mining_block : Block
-      refresh_mining_block unless @mining_block
+      refresh_mining_block(Consensus::DEFAULT_DIFFICULTY_TARGET) unless @mining_block
       @mining_block.not_nil!
     end
 
@@ -268,17 +315,13 @@ module ::Sushi::Core
      @premine ? @premine.not_nil!.get_total_amount : 0_i64
    end
 
-    def refresh_mining_block
+    def refresh_mining_block(difficulty)
       coinbase_amount = coinbase_amount(latest_index + 1, embedded_transactions, get_premine_total_amount)
       coinbase_transaction = create_coinbase_transaction(coinbase_amount, node.miners)
-
       transactions = align_transactions(coinbase_transaction, coinbase_amount)
       timestamp = __timestamp
 
-      elapsed_block_time = timestamp - latest_block.timestamp
-
-      difficulty = block_difficulty(chain)
-      debug "Calculated a difficulty of #{difficulty} in refresh_mining_block"
+      debug "We are in refresh_mining_block, the next block will have a difficulty of #{difficulty}"
 
       @mining_block = Block.new(
         latest_index + 1,

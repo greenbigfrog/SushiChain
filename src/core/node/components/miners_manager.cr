@@ -85,11 +85,20 @@ module ::Sushi::Core::NodeComponents
       _m_content = MContentMinerFoundNonce.from_json(_content)
 
       nonce = _m_content.nonce
+      mined_timestamp = _m_content.timestamp
 
+      debug "received a nonce of #{nonce} from a miner at timestamp #{mined_timestamp}"
+      
       if miner = find?(socket)
+        block = @blockchain.mining_block.with_nonce_and_timestamp(nonce, mined_timestamp)
+
+        debug "Received a freshly mined block..."
+        block.to_s
+        freshly_mined_block = block
+
         if @miners.map { |m| m[:context][:nonces] }.flatten.includes?(nonce)
           warning "nonce #{nonce} has already been discoverd"
-        elsif !@blockchain.mining_block.with_nonce(nonce).valid_nonce?(@blockchain.mining_block_difficulty_miner)
+        elsif !block.valid_nonce?(@blockchain.mining_block_difficulty_miner)
           warning "received nonce is invalid, try to update latest block"
 
           send(miner[:socket], M_TYPE_MINER_BLOCK_UPDATE, {
@@ -103,10 +112,15 @@ module ::Sushi::Core::NodeComponents
           miner[:context][:nonces].push(nonce)
 
           if block = @blockchain.valid_nonce?(nonce)
+            debug "found nonce of #{block.nonce} was valid at timestamp #{block.timestamp}"
+            block.to_s
             node.new_block(block)
             node.send_block(block)
 
             clear_nonces
+          else
+            debug "found nonce was invalid.. not enough leading zeros in hash from miner to match difficutly?"
+            valid_pow?(freshly_mined_block.to_hash, nonce, @blockchain.mining_block_difficulty_miner, true)
           end
         end
       end
