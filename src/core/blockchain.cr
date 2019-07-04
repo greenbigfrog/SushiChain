@@ -149,14 +149,14 @@ module ::Sushi::Core
     end
 
     
-    #def mining_block_difficulty_miner : Int32
-    #  value = (mining_block_difficulty.to_f / 3).ceil.to_i
-    #  Math.max(mining_block_difficulty - value, 1)
-    #end
-
     def mining_block_difficulty_miner : Int32
-     mining_block_difficulty - 1
+      value = (mining_block_difficulty.to_f / 3).ceil.to_i
+      Math.max(mining_block_difficulty - value, 1)
     end
+
+    #def mining_block_difficulty_miner : Int32
+    # mining_block_difficulty - 1
+    #end
 
     def push_block(block : Block)
       @chain.push(block)

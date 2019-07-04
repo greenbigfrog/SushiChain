@@ -120,7 +120,7 @@ module ::Sushi::Core::NodeComponents
             clear_nonces
           else
             debug "found nonce was invalid.. not enough leading zeros in hash from miner to match difficutly?"
-            valid_pow?(freshly_mined_block.to_hash, nonce, @blockchain.mining_block_difficulty_miner, true)
+            valid_pow?(freshly_mined_block.to_hash, nonce, @blockchain.mining_block_difficulty, true)
           end
         end
       end
