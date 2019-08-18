@@ -214,57 +214,57 @@ module ::Sushi::Core::Protocol
   # NODE
   ######################################
 
-  M_TYPE_NODE_BROADCAST_TRANSACTION = 0x0101
+  M_TYPE_NODE_BROADCAST_SLOW_TRANSACTION = 0x0101
 
-  struct MContentNodeBroadcastTransaction
+  struct MContentNodeBroadcastSlowTransaction
     JSON.mapping({
       transaction: Transaction,
       from:        Core::NodeComponents::Chord::NodeContext,
     })
   end
 
-  M_TYPE_NODE_BROADCAST_BLOCK = 0x0102
+  M_TYPE_NODE_BROADCAST_SLOW_BLOCK = 0x0102
 
-  struct MContentNodeBroadcastBlock
+  struct MContentNodeBroadcastSlowBlock
     JSON.mapping({
       block: SlowBlock,
       from:  Core::NodeComponents::Chord::NodeContext,
     })
   end
 
-  M_TYPE_NODE_REQUEST_CHAIN = 0x0103
+  M_TYPE_NODE_REQUEST_SLOW_CHAIN = 0x0103
 
-  struct MContentNodeRequestChain
+  struct MContentNodeRequestSlowChain
     JSON.mapping({
       latest_index: Int64,
     })
   end
 
-  M_TYPE_NODE_RECEIVE_CHAIN = 0x0104
+  M_TYPE_NODE_RECEIVE_SLOW_CHAIN = 0x0104
 
-  struct MContentNodeReceiveChain
+  struct MContentNodeReceiveSlowChain
     JSON.mapping({
       chain: Blockchain::Chain?,
     })
   end
 
-  M_TYPE_NODE_ASK_REQUEST_CHAIN = 0x0105
+  M_TYPE_NODE_ASK_REQUEST_SLOW_CHAIN = 0x0105
 
-  struct MContentNodeAskRequestChain
+  struct MContentNodeAskRequestSlowChain
     JSON.mapping({
       latest_index: Int64,
     })
   end
 
-  M_TYPE_NODE_REQUEST_TRANSACTIONS = 0x0106
+  M_TYPE_NODE_REQUEST_SLOW_TRANSACTIONS = 0x0106
 
-  struct MContentNodeRequestTransactions
+  struct MContentNodeRequestSlowTransactions
     JSON.mapping({transactions: Array(Transaction)})
   end
 
-  M_TYPE_NODE_RECEIVE_TRANSACTIONS = 0x0107
+  M_TYPE_NODE_RECEIVE_SLOW_TRANSACTIONS = 0x0107
 
-  struct MContentNodeReceiveTransactions
+  struct MContentNodeReceiveSlowTransactions
     JSON.mapping({transactions: Array(Transaction)})
   end
 

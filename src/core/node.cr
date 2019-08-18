@@ -105,7 +105,7 @@ module ::Sushi::Core
         debug "asking to sync chain at index #{@conflicted_index.nil? ? @blockchain.latest_index : @conflicted_index.not_nil!}"
         send(
           _s,
-          M_TYPE_NODE_REQUEST_CHAIN,
+          M_TYPE_NODE_REQUEST_SLOW_CHAIN,
           {
             latest_index: @conflicted_index.nil? ? @blockchain.latest_index : @conflicted_index.not_nil!,
           }
@@ -136,7 +136,7 @@ module ::Sushi::Core
 
         send(
           _s,
-          M_TYPE_NODE_REQUEST_TRANSACTIONS,
+          M_TYPE_NODE_REQUEST_SLOW_TRANSACTIONS,
           {
             transactions: transactions,
           }
@@ -193,20 +193,20 @@ module ::Sushi::Core
           @chord.stabilize_as_successor(self, socket, message_content)
         when M_TYPE_CHORD_STABILIZE_AS_PREDECESSOR
           @chord.stabilize_as_predecessor(self, socket, message_content)
-        when M_TYPE_NODE_REQUEST_CHAIN
-          _request_chain(socket, message_content)
-        when M_TYPE_NODE_RECEIVE_CHAIN
-          _receive_chain(socket, message_content)
-        when M_TYPE_NODE_BROADCAST_TRANSACTION
-          _broadcast_transaction(socket, message_content)
-        when M_TYPE_NODE_BROADCAST_BLOCK
-          _broadcast_block(socket, message_content)
-        when M_TYPE_NODE_ASK_REQUEST_CHAIN
-          _ask_request_chain(socket, message_content)
-        when M_TYPE_NODE_REQUEST_TRANSACTIONS
-          _request_transactions(socket, message_content)
-        when M_TYPE_NODE_RECEIVE_TRANSACTIONS
-          _receive_transactions(socket, message_content)
+        when M_TYPE_NODE_REQUEST_SLOW_CHAIN
+          _request_slow_chain(socket, message_content)
+        when M_TYPE_NODE_RECEIVE_SLOW_CHAIN
+          _receive_slow_chain(socket, message_content)
+        when M_TYPE_NODE_BROADCAST_SLOW_TRANSACTION
+          _broadcast_slow_transaction(socket, message_content)
+        when M_TYPE_NODE_BROADCAST_SLOW_BLOCK
+          _broadcast_slow_block(socket, message_content)
+        when M_TYPE_NODE_ASK_REQUEST_SLOW_CHAIN
+          _ask_request_slow_chain(socket, message_content)
+        when M_TYPE_NODE_REQUEST_SLOW_TRANSACTIONS
+          _request_slow_transactions(socket, message_content)
+        when M_TYPE_NODE_RECEIVE_SLOW_TRANSACTIONS
+          _receive_slow_transactions(socket, message_content)
         when M_TYPE_NODE_SEND_CLIENT_CONTENT
           _receive_client_content(socket, message_content)
         end
@@ -255,7 +255,7 @@ module ::Sushi::Core
                   {transaction: transaction, from: from}
                 end
 
-      send_on_chord(M_TYPE_NODE_BROADCAST_TRANSACTION, content, from)
+      send_on_chord(M_TYPE_NODE_BROADCAST_SLOW_TRANSACTION, content, from)
     end
 
     def broadcast_transaction(transaction : Transaction, from : Chord::NodeContext? = nil)
@@ -275,7 +275,7 @@ module ::Sushi::Core
                 end
 
       debug "before send_on_chord"
-      send_on_chord(M_TYPE_NODE_BROADCAST_BLOCK, content, from)
+      send_on_chord(M_TYPE_NODE_BROADCAST_SLOW_BLOCK, content, from)
       debug "after send_on_chord.. exiting send_block"
     end
 
@@ -321,7 +321,7 @@ module ::Sushi::Core
         if predecessor = @chord.find_predecessor?
           send(
             predecessor[:socket],
-            M_TYPE_NODE_ASK_REQUEST_CHAIN,
+            M_TYPE_NODE_ASK_REQUEST_SLOW_CHAIN,
             {
               latest_index: @blockchain.latest_block.index,
             }
@@ -349,10 +349,10 @@ module ::Sushi::Core
       @miners_manager.broadcast
     end
 
-    private def _broadcast_transaction(socket, _content)
+    private def _broadcast_slow_transaction(socket, _content)
       return unless @phase == SetupPhase::DONE
 
-      _m_content = MContentNodeBroadcastTransaction.from_json(_content)
+      _m_content = MContentNodeBroadcastSlowTransaction.from_json(_content)
 
       transaction = _m_content.transaction
       from = _m_content.from
@@ -360,10 +360,10 @@ module ::Sushi::Core
       broadcast_transaction(transaction, from)
     end
 
-    private def _broadcast_block(socket, _content)
+    private def _broadcast_slow_block(socket, _content)
       return unless @phase == SetupPhase::DONE
 
-      _m_content = MContentNodeBroadcastBlock.from_json(_content)
+      _m_content = MContentNodeBroadcastSlowBlock.from_json(_content)
 
       block = _m_content.block
       from = _m_content.from
@@ -382,21 +382,21 @@ module ::Sushi::Core
       @clients_manager.receive_content(content, from)
     end
 
-    private def _request_chain(socket, _content)
-      _m_content = MContentNodeRequestChain.from_json(_content)
+    private def _request_slow_chain(socket, _content)
+      _m_content = MContentNodeRequestSlowChain.from_json(_content)
 
       latest_index = _m_content.latest_index
 
       info "requested new chain: #{latest_index}"
 
-      send(socket, M_TYPE_NODE_RECEIVE_CHAIN, {chain: @blockchain.subchain(latest_index)})
+      send(socket, M_TYPE_NODE_RECEIVE_SLOW_CHAIN, {chain: @blockchain.subchain(latest_index)})
       debug "chain sent to peer for sync"
 
       sync_chain(socket) if latest_index > @blockchain.latest_block.index
     end
 
-    private def _receive_chain(socket, _content)
-      _m_content = MContentNodeReceiveChain.from_json(_content)
+    private def _receive_slow_chain(socket, _content)
+      _m_content = MContentNodeReceiveSlowChain.from_json(_content)
 
       chain = _m_content.chain
 
@@ -421,8 +421,8 @@ module ::Sushi::Core
       end
     end
 
-    private def _ask_request_chain(socket, _content)
-      _m_content = MContentNodeAskRequestChain.from_json(_content)
+    private def _ask_request_slow_chain(socket, _content)
+      _m_content = MContentNodeAskRequestSlowChain.from_json(_content)
 
       _latest_index = _m_content.latest_index
 
@@ -434,8 +434,8 @@ module ::Sushi::Core
       end
     end
 
-    private def _request_transactions(socket, _content)
-      MContentNodeRequestTransactions.from_json(_content)
+    private def _request_slow_transactions(socket, _content)
+      MContentNodeRequestSlowTransactions.from_json(_content)
 
       info "requested transactions"
 
@@ -443,15 +443,15 @@ module ::Sushi::Core
 
       send(
         socket,
-        M_TYPE_NODE_RECEIVE_TRANSACTIONS,
+        M_TYPE_NODE_RECEIVE_SLOW_TRANSACTIONS,
         {
           transactions: transactions,
         }
       )
     end
 
-    private def _receive_transactions(socket, _content)
-      _m_content = MContentNodeReceiveTransactions.from_json(_content)
+    private def _receive_slow_transactions(socket, _content)
+      _m_content = MContentNodeReceiveSlowTransactions.from_json(_content)
 
       transactions = _m_content.transactions
 
