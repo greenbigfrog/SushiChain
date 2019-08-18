@@ -39,7 +39,7 @@ module ::Sushi::Core
     def initialize(@wallet : Wallet, @database : Database?, @developer_fund : DeveloperFund?)
       initialize_dapps
 
-      TransactionPool.setup
+      SlowTransactionPool.setup
     end
 
     def setup(@node : Node)
@@ -91,9 +91,9 @@ module ::Sushi::Core
     end
 
     def clean_transactions
-      TransactionPool.lock
+      SlowTransactionPool.lock
       transactions = pending_transactions.reject { |t| indices.get(t.id) }
-      TransactionPool.replace(transactions)
+      SlowTransactionPool.replace(transactions)
     end
 
     def valid_nonce?(nonce : UInt64) : SlowBlock?
@@ -186,7 +186,7 @@ module ::Sushi::Core
       transactions.each_with_index do |t, i|
         progress "validating transaction #{t.short_id}", i + 1, transactions.size
 
-        t = TransactionPool.find(t) || t
+        t = SlowTransactionPool.find(t) || t
         t.valid_common?
 
         replace_transactions << t
@@ -194,8 +194,8 @@ module ::Sushi::Core
         rejects.record_reject(t.id, e)
       end
 
-      TransactionPool.lock
-      TransactionPool.replace(replace_transactions)
+      SlowTransactionPool.lock
+      SlowTransactionPool.replace(replace_transactions)
     end
 
     def add_transaction(transaction : Transaction, with_spawn : Bool = true)
@@ -204,7 +204,7 @@ module ::Sushi::Core
 
     private def _add_transaction(transaction : Transaction)
       if transaction.valid_common?
-        TransactionPool.add(transaction)
+        SlowTransactionPool.add(transaction)
       end
     rescue e : Exception
       rejects.record_reject(transaction.id, e)
@@ -263,11 +263,11 @@ module ::Sushi::Core
     end
 
     def pending_transactions : Transactions
-      TransactionPool.all
+      SlowTransactionPool.all
     end
 
     def embedded_transactions : Transactions
-      TransactionPool.embedded
+      SlowTransactionPool.embedded
     end
 
     def mining_block : SlowBlock
@@ -308,7 +308,7 @@ module ::Sushi::Core
       rescue e : Exception
         rejects.record_reject(t.id, e)
 
-        TransactionPool.delete(t)
+        SlowTransactionPool.delete(t)
       end
       debug "exited align_transactions with embedded_transactions size: #{embedded_transactions.size}"
 

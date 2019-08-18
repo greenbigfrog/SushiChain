@@ -11,7 +11,8 @@
 # Removal or modification of this copyright notice is prohibited.
 
 module ::Sushi::Core
-  class SlowBlock < Block
+  class SlowBlock
+    extend Hashes
 
     JSON.mapping({
       index:            Int64,
@@ -32,6 +33,11 @@ module ::Sushi::Core
       @difficulty : Int32
     )
       @merkle_tree_root = calculate_merkle_tree_root
+    end
+
+    def to_hash : String
+      string = self.to_json
+      sha256(string)
     end
 
     def to_s
@@ -59,6 +65,27 @@ module ::Sushi::Core
       self
     end
 
+    def calculate_merkle_tree_root : String
+      return "" if @transactions.size == 0
+
+      current_hashes = @transactions.map { |tx| tx.to_hash }
+
+      loop do
+        tmp_hashes = [] of String
+
+        (current_hashes.size / 2).times do |i|
+          tmp_hashes.push(sha256(current_hashes[i*2] + current_hashes[i*2 + 1]))
+        end
+
+        tmp_hashes.push(current_hashes[-1]) if current_hashes.size % 2 == 1
+
+        current_hashes = tmp_hashes
+        break if current_hashes.size == 1
+      end
+
+      ripemd160(current_hashes[0])
+    end
+
     def valid_nonce?(difficulty : Int32)
       valid_nonce?(self.to_hash, @nonce, difficulty)
     end
@@ -69,7 +96,7 @@ module ::Sushi::Core
     end
 
     private def process_transaction(blockchain, transaction, idx)
-      t = TransactionPool.find(transaction) || transaction
+      t = SlowTransactionPool.find(transaction) || transaction
       t.valid_common?
 
       if idx == 0
@@ -136,5 +163,10 @@ module ::Sushi::Core
       @transactions.find { |t| t.id == transaction_id }
     end
 
+    include Hashes
+    include Logger
+    include Protocol
+    include Consensus
+    include Common::Timestamp
   end
 end
